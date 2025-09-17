@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Đọc Truyện Tiếng Việt</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            text-align: center;
+            background: #f5f6fa;
+        }
+
+        h1 {
+            margin-bottom: 20px;
+        }
+
+        .player {
+            background: #fff;
+            border-radius: 10px;
+            padding: 20px;
+            display: inline-block;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+            min-width: 450px;
+        }
+
+        .player button {
+            margin: 5px;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            background: #007bff;
+            color: #fff;
+            transition: 0.3s;
+        }
+
+        .player button:hover {
+            background: #0056b3;
+        }
+
+        .speed-control {
+            margin-top: 15px;
+        }
+
+        input[type="range"] {
+            width: 90%;
+        }
+
+        .speed-label {
+            font-weight: bold;
+            margin-top: 5px;
+            display: block;
+        }
+
+        .progress {
+            margin-top: 15px;
+        }
+
+        .time {
+            font-size: 14px;
+            margin-top: 5px;
+        }
+
+        #overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.6);
+            z-index: 9998;
+        }
+
+        #popup {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 66%;
+            height: 70%;
+            background: #fff;
+            border-radius: 10px;
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.4);
+            z-index: 9999;
+            padding: 20px;
+            overflow-y: auto;
+            text-align: left;
+        }
+
+        #popup h2 {
+            margin-top: 0;
+            text-align: center;
+        }
+
+        #popup .highlight {
+            background-color: yellow;
+        }
+
+        #popup-close {
+            position: absolute;
+            top: 10px;
+            right: 15px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 18px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>Web Đọc Truyện Tiếng Việt</h1>
+    <input type="file" id="fileInput" accept=".txt"><br><br>
+
+    <div class="player">
+        <div>
+            <button id="openPopup">📖 Đọc Text</button>
+            <button id="play">▶ Play</button>
+            <button id="pause">⏸ Pause/Resume</button>
+            <button id="stop">⏹ Stop</button>
+        </div>
+
+        <div class="progress">
+            <input type="range" id="progressBar" min="0" max="100" step="0.1" value="0">
+            <div class="time"><span id="currentTime">0:00</span> / <span id="totalTime">0:00</span></div>
+        </div>
+
+        <div class="speed-control">
+            <label for="speedRange">Tốc độ đọc:</label><br>
+            <input type="range" id="speedRange" min="0.5" max="3" step="0.25" value="1">
+            <span class="speed-label" id="speedLabel">1x</span>
+        </div>
+
+        <div class="speed-control">
+            <label for="voiceSelect">Chọn giọng đọc:</label><br>
+            <select id="voiceSelect"></select>
+        </div>
+    </div>
+
+    <div id="overlay"></div>
+    <div id="popup">
+        <span id="popup-close">✖</span>
+        <h2>Nội dung truyện</h2>
+        <div id="text-container"></div>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        const popup = document.getElementById('popup');
+        const overlay = document.getElementById('overlay');
+        const popupClose = document.getElementById('popup-close');
+        const container = document.getElementById('text-container');
+        const openPopupBtn = document.getElementById('openPopup');
+        const playBtn = document.getElementById('play');
+        const pauseBtn = document.getElementById('pause');
+        const stopBtn = document.getElementById('stop');
+        const speedRange = document.getElementById('speedRange');
+        const speedLabel = document.getElementById('speedLabel');
+        const progressBar = document.getElementById('progressBar');
+        const currentTimeEl = document.getElementById('currentTime');
+        const totalTimeEl = document.getElementById('totalTime');
+        const voiceSelect = document.getElementById('voiceSelect');
+
+        let utterance;
+        let sentences = [];
+        let currentIndex = 0;
+        let totalDuration = 0;
+        let elapsed = 0;
+        let timer;
+        let voices = [];
+        let selectedVoice = null;
+
+        // 🔄 Luôn tìm cho bằng được giọng tiếng Việt
+        function ensureVietnameseVoices() {
+            return new Promise(resolve => {
+                let attempts = 0;
+                function check() {
+                    voices = speechSynthesis.getVoices().filter(v => v.lang.startsWith("vi"));
+                    if (voices.length > 0) {
+                        resolve(voices);
+                    } else if (attempts < 1000) {
+                        attempts++;
+                        setTimeout(check, 300);
+                    } else {
+                        alert("Không tìm thấy giọng tiếng Việt. Vui lòng kiểm tra lại Chrome.");
+                    }
+                }
+                check();
+            });
+        }
+
+        async function loadVoices() {
+            voices = await ensureVietnameseVoices();
+            voiceSelect.innerHTML = '';
+            voices.forEach((v, i) => {
+                const opt = document.createElement("option");
+                opt.value = i;
+                opt.textContent = v.name + " (" + v.lang + ")";
+                voiceSelect.appendChild(opt);
+            });
+            if (voices.length > 0) selectedVoice = voices[0];
+        }
+        speechSynthesis.onvoiceschanged = loadVoices;
+
+        voiceSelect.addEventListener("change", () => {
+            selectedVoice = voices[voiceSelect.value];
+        });
+
+        function estimateDuration(text, rate) {
+            const words = text.split(/\s+/).length;
+            return (words * 0.4) / rate;
+        }
+
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function (evt) {
+                const text = evt.target.result;
+                sentences = text.split('\n').filter(s => s.trim() !== '');
+                currentIndex = 0;
+                totalDuration = sentences.reduce((acc, s) => acc + estimateDuration(s, speedRange.value), 0);
+                totalTimeEl.textContent = formatTime(totalDuration);
+            };
+            reader.readAsText(file, 'UTF-8');
+        });
+
+        function renderSentences() {
+            container.innerHTML = '';
+            sentences.forEach((s, i) => {
+                const p = document.createElement('p');
+                p.id = 'line-' + i;
+                p.textContent = s;
+                container.appendChild(p);
+            });
+        }
+
+        function highlightSentence(index) {
+            sentences.forEach((_, i) => {
+                const p = document.getElementById('line-' + i);
+                if (p) p.classList.toggle('highlight', i === index);
+            });
+            const el = document.getElementById('line-' + index);
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+
+        function speakSentence(index) {
+            if (index >= sentences.length) {
+                clearInterval(timer);
+                return;
+            }
+            currentIndex = index;
+            const text = sentences[index];
+            utterance = new SpeechSynthesisUtterance(text);
+            utterance.rate = parseFloat(speedRange.value);
+            utterance.lang = "vi-VN";
+            if (selectedVoice) utterance.voice = selectedVoice;
+
+            utterance.onend = () => speakSentence(index + 1);
+            highlightSentence(index);
+            window.speechSynthesis.speak(utterance);
+        }
+
+        function formatTime(sec) {
+            const m = Math.floor(sec / 60);
+            const s = Math.floor(sec % 60);
+            return `${m}:${s.toString().padStart(2, '0')}`;
+        }
+
+        function startTimer() {
+            clearInterval(timer);
+            elapsed = 0;
+            timer = setInterval(() => {
+                if (!window.speechSynthesis.speaking) return;
+                elapsed += 0.2;
+                progressBar.value = (elapsed / totalDuration) * 100;
+                currentTimeEl.textContent = formatTime(elapsed);
+            }, 200);
+        }
+
+        openPopupBtn.addEventListener('click', () => {
+            if (sentences.length === 0) return alert("Vui lòng tải file trước!");
+            overlay.style.display = "block";
+            popup.style.display = "block";
+            renderSentences();
+        });
+
+        popupClose.addEventListener('click', closePopup);
+        overlay.addEventListener('click', closePopup);
+
+        function closePopup() {
+            overlay.style.display = "none";
+            popup.style.display = "none";
+            window.speechSynthesis.cancel();
+            clearInterval(timer);
+            currentIndex = 0;
+        }
+
+        playBtn.addEventListener('click', () => {
+            if (sentences.length === 0) return alert("Vui lòng tải file trước!");
+            if (!window.speechSynthesis.speaking) {
+                speakSentence(currentIndex);
+                startTimer();
+            }
+        });
+
+        pauseBtn.addEventListener('click', () => {
+            if (window.speechSynthesis.speaking && !window.speechSynthesis.paused) {
+                window.speechSynthesis.pause();
+            } else if (window.speechSynthesis.paused) {
+                window.speechSynthesis.resume();
+            }
+        });
+
+        stopBtn.addEventListener('click', () => {
+            window.speechSynthesis.cancel();
+            clearInterval(timer);
+            currentIndex = 0;
+            elapsed = 0;
+            progressBar.value = 0;
+            currentTimeEl.textContent = "0:00";
+            renderSentences();
+        });
+
+        speedRange.addEventListener('input', () => {
+            speedLabel.textContent = speedRange.value + "x";
+            if (sentences.length > 0) {
+                totalDuration = sentences.reduce((acc, s) => acc + estimateDuration(s, speedRange.value), 0);
+                totalTimeEl.textContent = formatTime(totalDuration);
+            }
+        });
+
+        progressBar.addEventListener('input', () => {
+            if (sentences.length === 0) return;
+            const newTime = (progressBar.value / 100) * totalDuration;
+            elapsed = newTime;
+            currentTimeEl.textContent = formatTime(elapsed);
+            let sum = 0, idx = 0;
+            for (let i = 0; i < sentences.length; i++) {
+                sum += estimateDuration(sentences[i], speedRange.value);
+                if (sum >= newTime) { idx = i; break; }
+            }
+            window.speechSynthesis.cancel();
+            speakSentence(idx);
+        });
+    </script>
+</body>
+
+</html>
